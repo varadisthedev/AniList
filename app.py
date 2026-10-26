@@ -99,6 +99,38 @@ div[data-testid="stPopover"] > button:hover {
   border-color: #ff5e00;
   color: #ff5e00;
 }
+div[data-testid="stPopover"] > button {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  box-shadow: none !important;
+  border-radius: 8px !important;
+  padding: 0.4rem !important;
+  min-height: 42px !important;
+  min-width: 42px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+div[data-testid="stPopover"] > button:hover {
+  background: #1f1f1f !important;
+  border-color: #383838 !important;
+}
+div[data-testid="stPopover"] > button img {
+  width: 22px !important;
+  height: 22px !important;
+  object-fit: contain !important;
+  display: block;
+}
+div.stButton > button[kind="secondaryButton"] {
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #4a4a4a;
+}
+div.stButton > button[kind="secondaryButton"]:hover {
+  background: #444;
+  color: #fff;
+  border-color: #555;
+}
 .hero { position: relative; overflow: hidden; border-radius: 18px; padding: 2.2rem 2.5rem 1.8rem; border: 1px solid rgba(255,255,255,.07); margin-bottom: 1.2rem; min-height: 360px; display: flex; flex-direction: column; justify-content: center; background: #141414; }
 .hero-bg { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: cover; object-position: center right; transform: scale(1.35); transform-origin: center right; z-index: 0; pointer-events: none; }
 .hero-overlay { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background-image: linear-gradient(90deg, rgba(20,20,20,.98) 0%, rgba(20,20,20,.82) 50%, rgba(20,20,20,.20) 100%), linear-gradient(0deg, #141414 0%, rgba(20,20,20,0) 65%); z-index: 1; pointer-events: none; }
@@ -182,6 +214,39 @@ def _hero_image_data_uri() -> str:
 
 
 _hero_image = _hero_image_data_uri()
+
+
+@st.cache_data
+def _icon_data_uri(name: str) -> str:
+    path = ROOT / "assets" / name
+    if not path.exists():
+        return ""
+    try:
+        from PIL import Image
+        import io
+        with Image.open(path) as img:
+            img = img.convert("RGBA")
+            bbox = img.getbbox()
+            if bbox:
+                img = img.crop(bbox)
+            # Normalize the visible icon into a square canvas.
+            img.thumbnail((96, 96), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+            x = (128 - img.width) // 2
+            y = (128 - img.height) // 2
+            canvas.alpha_composite(img, (x, y))
+            buf = io.BytesIO()
+            canvas.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(
+            buf.getvalue()
+        ).decode("ascii")
+    except Exception as exc:
+        print(f"Could not load icon {name}: {exc}")
+        return ""
+
+
+_profile_icon = _icon_data_uri("Profile.png")
+_history_icon = _icon_data_uri("history.png")
 
 # ---------------------------------- SQLite Cloud -----------------------------
 @contextmanager
@@ -269,26 +334,26 @@ def record_search_history(user_id: int, query: str, matched_title: str | None = 
         with get_conn() as conn:
             last = conn.execute(
                 "SELECT query FROM search_history WHERE user_id=? ORDER BY history_id DESC LIMIT 1",
-                (user_id,),
+                (int(user_id),),
             ).fetchone()
             if not last or last["query"].strip().casefold() != query.strip().casefold():
                 conn.execute(
                     "INSERT INTO search_history(user_id, query, matched_title) VALUES(?,?,?)",
-                    (user_id, query.strip(), matched_title or ""),
+                    (int(user_id), query.strip(), matched_title or ""),
                 )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"record_search_history error: {exc}")
 
 
 def get_search_history(user_id: int, limit: int = 15) -> list[dict]:
     try:
         with get_conn() as conn:
             rows = conn.execute(
-                "SELECT history_id, query, matched_title, searched_at FROM search_history WHERE user_id=? ORDER BY history_id DESC LIMIT ?",
-                (user_id, limit),
+                f"SELECT history_id, query, matched_title, searched_at FROM search_history WHERE user_id={int(user_id)} ORDER BY history_id DESC LIMIT {int(limit)}"
             ).fetchall()
-        return [dict(r) for r in rows]
-    except Exception:
+        return [{"history_id": r["history_id"], "query": r["query"], "matched_title": r["matched_title"], "searched_at": r["searched_at"]} for r in rows]
+    except Exception as exc:
+        print(f"get_search_history error for user {user_id}: {exc}")
         return []
 
 
@@ -622,27 +687,37 @@ def verify_token(token: str):
 
 
 def render_auth_and_header() -> None:
+    token = st.session_state.get("jwt_token") or st.query_params.get("token")
     user = st.session_state.get("user")
-    if "jwt_token" in st.session_state and not user:
-        user = verify_token(st.session_state["jwt_token"])
+    if token and not user:
+        user = verify_token(token)
         if user:
             st.session_state.user = user
+            st.session_state.jwt_token = token
+            st.query_params["token"] = token
+        else:
+            st.session_state.pop("jwt_token", None)
+            if "token" in st.query_params:
+                del st.query_params["token"]
+
+    prof_label = f"![Profile]({_profile_icon})" if _profile_icon else "Profile"
+    hist_label = f"![History]({_history_icon})" if _history_icon else "History"
 
     if user:
-        col_prof, col_hist, col_brand = st.columns([0.16, 0.14, 1.2], vertical_alignment="center")
+        col_prof, col_hist, col_brand = st.columns([0.12, 0.12, 1.6], vertical_alignment="center", gap="small")
         with col_prof:
-            with st.popover(f"👤 {user['username']}", help="Profile & Account"):
-                st.markdown(f"### 👤 {user['username']}")
-                st.markdown("<span style='color:#00e676;font-size:0.8rem;font-weight:700;'>● Signed in via JWT</span>", unsafe_allow_html=True)
-                st.caption(f"User ID: `{user['user_id']}` · SQLite Auth")
-                st.markdown("---")
-                if st.button("Log out", key="logout_btn", use_container_width=True):
+            with st.popover(prof_label):
+                st.markdown(f"### hello, {user['username']}")
+                st.markdown("<span style='color:#00e676;font-size:0.8rem;font-weight:700;'>● Active Session</span>", unsafe_allow_html=True)
+                if st.button("Log out", key="logout_btn", type="secondary", use_container_width=True):
                     st.session_state.user = None
                     st.session_state.pop("jwt_token", None)
+                    if "token" in st.query_params:
+                        del st.query_params["token"]
                     st.rerun()
         with col_hist:
-            with st.popover("🕒 History", help="Search history"):
-                st.markdown("### 🕒 Search History")
+            with st.popover(hist_label):
+                st.markdown("###Search History")
                 history = get_search_history(user["user_id"])
                 if not history:
                     st.info("No past searches yet. Search for any anime to see it here!")
@@ -650,7 +725,7 @@ def render_auth_and_header() -> None:
                     for item in history:
                         q_text = item["query"]
                         m_text = item.get("matched_title")
-                        label = f"🔍 {q_text}"
+                        label = f"{q_text}"
                         if m_text and m_text.casefold() != q_text.casefold():
                             label += f" ({m_text})"
                         if st.button(label, key=f"hist_btn_{item['history_id']}", use_container_width=True):
@@ -662,12 +737,12 @@ def render_auth_and_header() -> None:
                         clear_search_history(user["user_id"])
                         st.rerun()
         with col_brand:
-            st.markdown('<div class="brand">ANISTAT <span style="color:#f5f5f5;font-weight:500;letter-spacing:0">/ YOUR NEXT FAVORITE ANIME</span></div>', unsafe_allow_html=True)
+            st.markdown('<div class="brand">ANISTAT <span style="color:#f5f5f5;font-weight:800;letter-spacing:0">/ YOUR NEXT FAVORITE ANIME</span></div>', unsafe_allow_html=True)
     else:
-        col_prof, col_brand = st.columns([0.14, 1.3], vertical_alignment="center")
+        col_prof, col_brand = st.columns([0.12, 1.6], vertical_alignment="center", gap="small")
         with col_prof:
-            with st.popover("👤 Sign In", help="Account & JWT Login"):
-                st.markdown("### 👤 Account Access")
+            with st.popover(prof_label):
+                st.markdown("### Account Access")
                 st.caption("Sign in with your SQLite credentials or create an account.")
                 mode = st.radio("Mode", ["Login", "Sign up"], horizontal=True, label_visibility="collapsed", key="auth_mode")
                 username = st.text_input("Username", key="auth_username_pop").strip()
@@ -689,6 +764,7 @@ def render_auth_and_header() -> None:
                                     token = create_token(uid, username)
                                     st.session_state.user = {"user_id": uid, "username": username}
                                     st.session_state.jwt_token = token
+                                    st.query_params["token"] = token
                                     st.rerun()
                             else:
                                 if not existing or not verify_password(password, existing["password_hash"]):
@@ -698,9 +774,10 @@ def render_auth_and_header() -> None:
                                     token = create_token(uid, existing["username"])
                                     st.session_state.user = {"user_id": uid, "username": existing["username"]}
                                     st.session_state.jwt_token = token
+                                    st.query_params["token"] = token
                                     st.rerun()
         with col_brand:
-            st.markdown('<div class="brand">ANISTAT <span style="color:#f5f5f5;font-weight:500;letter-spacing:0">/ YOUR NEXT FAVORITE ANIME</span></div>', unsafe_allow_html=True)
+            st.markdown('<div class="brand" >ANISTAT <span style="color:#f5f5f5;font-weight:800;letter-spacing:0 align-right">/ YOUR NEXT FAVORITE ANIME</span></div>', unsafe_allow_html=True)
 
 # ---------------------------------- UI utils ---------------------------------
 def display_title(row) -> str:
@@ -771,13 +848,7 @@ def card_grid(data: pd.DataFrame, posters: dict[str, str], key_prefix: str, show
             if show_similarity and pd.notna(similarity):
                 st.caption(f"Similarity · {float(similarity):.1f}%")
             st.markdown("</div></div>", unsafe_allow_html=True)
-            if user:
-                is_fav = is_favorite(user["user_id"], key)
-                if st.button("♥ Saved" if is_fav else "♡ Add to list", key=f"{key_prefix}_fav_{key}", use_container_width=True):
-                    toggle_favorite(user["user_id"], key)
-                    st.rerun()
-            elif AUTH_ENABLED:
-                st.caption("Sign in to save")
+           
 
 
 def is_favorite(user_id: int, anime_key: str) -> bool:
@@ -868,17 +939,17 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-query = st.text_input("", placeholder="recommend anime similar to", label_visibility="collapsed", key="anime_query")
+query = st.text_input("", placeholder="An anime similar to..", label_visibility="collapsed", key="anime_query")
 col_btn, col_orig = st.columns([0.24, 0.76], vertical_alignment="center")
 with col_btn:
     search_clicked = st.button("Find similar anime", type="primary", use_container_width=True)
-with col_orig:
-    originals_only = st.checkbox(
-        "🆕 Originals Only",
-        value=True,
-        key="originals_only",
-        help="Hide sequels, seasons, movies and spin-offs of the same series.",
-    )
+# with col_orig:
+#     originals_only = st.checkbox(
+#         "Originals only",
+#         value=True,
+#         key="originals_only",
+#         help="Hide sequels, seasons, movies and spin-offs of the same series.",
+#     )
 
 if query.strip() and (search_clicked or st.session_state.get("last_search_query") == query.strip()):
     match_idx, match_score = best_title_match(query, titles)
@@ -951,22 +1022,6 @@ else:
     card_grid(home, posters, "home", user=st.session_state.get("user"))
     st.markdown("---")
     st.markdown('<div class="small-muted">Tip: search for a title to see similar anime. Typos are okay — try a title even if you don\'t remember the exact spelling.</div>', unsafe_allow_html=True)
-
-# Optional score prediction: only show when the model artifact exists and is loadable.
-if joblib is not None and MODEL_PATH.exists():
-    with st.expander("Experimental score estimate", expanded=False):
-        st.caption("Model output is an estimate based on metadata, not an official score or guarantee.")
-        selected_title = st.selectbox("Choose an anime from the catalog", model_data["Title"].tolist(), key="score_estimate_title")
-        if st.button("Estimate score"):
-            try:
-                predictor = joblib.load(MODEL_PATH)
-                features = joblib.load(FEATURES_PATH) if FEATURES_PATH.exists() else ["Genres", "Themes", "Description", "Type", "Status", "Demographics", "Episodes"]
-                row = model_data.loc[model_data["Title"] == selected_title].iloc[0]
-                prediction_input = pd.DataFrame([{col: row.get(col, "") for col in features}])[features]
-                predicted = float(predictor.predict(prediction_input)[0])
-                st.metric("Estimated score", f"{predicted:.2f} / 10")
-            except Exception as exc:
-                st.error(f"Could not run score prediction: {exc}")
 
 st.markdown("---")
 st.caption("AniStat · Local CSV catalog + SQLite poster cache · Similarity uses TF-IDF cosine similarity")
