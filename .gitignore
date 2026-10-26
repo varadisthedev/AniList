@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+.env
+db/
+2026-10-27-004513-pastedcontent-id10ff.txt
