@@ -777,8 +777,11 @@ def render_auth_and_header() -> None:
                                     st.query_params["token"] = token
                                     st.rerun()
         with col_brand:
-            st.markdown('<div class="brand" >ANISTAT <span style="color:#f5f5f5;font-weight:800;letter-spacing:0 align-right">/ YOUR NEXT FAVORITE ANIME</span></div>', unsafe_allow_html=True)
-
+            st.markdown(
+             '<div class="brand" style="font-size: 32px;">ANISTAT <span style="color:#f5f5f5;font-weight:800;letter-spacing:0;">/ YOUR NEXT FAVORITE ANIME</span></div>', 
+                unsafe_allow_html=True
+            )
+    
 # ---------------------------------- UI utils ---------------------------------
 def display_title(row) -> str:
     return normalize_value(row.get("Title", "Untitled")) or "Untitled"
