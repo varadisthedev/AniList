@@ -1020,7 +1020,12 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-query = st.text_input("", placeholder="An anime similar to..", label_visibility="collapsed", key="anime_query")
+query = st.text_input(
+    "Anime search",
+    placeholder="An anime similar to..",
+    label_visibility="collapsed",
+    key="anime_query",
+)
 col_btn, col_orig = st.columns([0.24, 0.76], vertical_alignment="center")
 with col_btn:
     search_clicked = st.button("Find similar anime", type="primary", use_container_width=True)
