@@ -140,6 +140,9 @@ div.stButton > button[kind="secondaryButton"]:hover {
 .eyebrow { color: #ff5e00; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; font-size: .78rem; }
 .section-title { font-size: 1.5rem; font-weight: 800; margin: 1.5rem 0 .2rem; }
 .section-sub { color: #aaa; margin-bottom: 1rem; }
+.predictor-result { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-top: 1rem; padding: 1rem 1.1rem; background: #292929; border: 1px solid #ff5e00; border-radius: 10px; }
+.predictor-result span { color: #d0d0d0; }
+.predictor-result strong { color: #ff7a2f; font-size: 1.5rem; }
 .anime-card { background: #1f1f1f; border: 1px solid #303030; border-radius: 12px; overflow: hidden; height: 100%; margin-bottom: .8rem; }
 
 @keyframes diagonal-shimmer {
@@ -787,6 +790,81 @@ def display_title(row) -> str:
     return normalize_value(row.get("Title", "Untitled")) or "Untitled"
 
 
+@st.cache_resource
+def load_score_predictor():
+    if joblib is None:
+        raise RuntimeError("The joblib package is not installed.")
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(f"Score model not found at {MODEL_PATH}.")
+    if not FEATURES_PATH.exists():
+        raise FileNotFoundError(f"Model feature metadata not found at {FEATURES_PATH}.")
+    model = joblib.load(MODEL_PATH)
+    feature_columns = joblib.load(FEATURES_PATH)
+    if not isinstance(feature_columns, list) or not feature_columns:
+        raise ValueError("The model feature metadata must be a non-empty list.")
+    return model, feature_columns
+
+
+def render_score_predictor() -> None:
+    st.markdown('<div class="section-title">Anime score predictor</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-sub">Estimate a title\'s score from its metadata using the AniStat model.</div>',
+        unsafe_allow_html=True,
+    )
+    try:
+        model, feature_columns = load_score_predictor()
+    except (FileNotFoundError, ImportError, AttributeError, ValueError, RuntimeError) as exc:
+        st.warning(f"Score prediction is unavailable: {exc}")
+        return
+
+    with st.container(border=True):
+        with st.form("anime_score_predictor_form"):
+            left, right = st.columns(2, gap="large")
+            with left:
+                genres = st.text_input("Genres", placeholder="Action, Adventure, Fantasy")
+                themes = st.text_input("Themes", placeholder="School, Military, Time Travel")
+                description = st.text_area(
+                    "Synopsis",
+                    placeholder="Describe the anime's story and premise.",
+                    height=140,
+                )
+                demographics = st.text_input("Demographics", placeholder="Shounen, Seinen")
+            with right:
+                anime_type = st.selectbox("Anime type", ["TV", "Movie", "OVA", "ONA", "Special", "Music"])
+                status = st.selectbox(
+                    "Airing status",
+                    ["Finished Airing", "Currently Airing", "Not yet aired"],
+                )
+                episodes = st.number_input("Episodes", min_value=1, max_value=2000, value=12, step=1)
+                submitted = st.form_submit_button("Predict score", type="primary", use_container_width=True)
+
+            if submitted:
+                values = {
+                    "Genres": genres.strip(),
+                    "Themes": themes.strip(),
+                    "Description": description.strip(),
+                    "Type": anime_type,
+                    "Status": status,
+                    "Demographics": demographics.strip(),
+                    "Episodes": episodes,
+                }
+                missing_columns = [column for column in feature_columns if column not in values]
+                if missing_columns:
+                    st.error(f"The model expects unsupported fields: {', '.join(missing_columns)}.")
+                else:
+                    input_data = pd.DataFrame([{column: values[column] for column in feature_columns}])
+                    try:
+                        prediction = float(model.predict(input_data)[0])
+                    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                        st.error(f"Could not predict a score with this model: {exc}")
+                    else:
+                        prediction = max(0.0, min(10.0, prediction))
+                        st.markdown(
+                            f'<div class="predictor-result"><span>Estimated score</span><strong>{prediction:.2f} / 10</strong></div>',
+                            unsafe_allow_html=True,
+                        )
+
+
 def display_date(value) -> str:
     value = normalize_value(value)
     if not value or value.lower() in {"nan", "nat", "none"}:
@@ -946,13 +1024,13 @@ query = st.text_input("", placeholder="An anime similar to..", label_visibility=
 col_btn, col_orig = st.columns([0.24, 0.76], vertical_alignment="center")
 with col_btn:
     search_clicked = st.button("Find similar anime", type="primary", use_container_width=True)
-# with col_orig:
-#     originals_only = st.checkbox(
-#         "Originals only",
-#         value=True,
-#         key="originals_only",
-#         help="Hide sequels, seasons, movies and spin-offs of the same series.",
-#     )
+with col_orig:
+    originals_only = st.checkbox(
+        "Originals only",
+        value=True,
+        key="originals_only",
+        help="Hide sequels, seasons, movies and spin-offs of the same series.",
+    )
 
 if query.strip() and (search_clicked or st.session_state.get("last_search_query") == query.strip()):
     match_idx, match_score = best_title_match(query, titles)
@@ -1023,6 +1101,7 @@ else:
     home = home.dropna(subset=["Score"]).sort_values(["Score", "Rank"], ascending=[False, True], na_position="last").head(25)
     posters = ensure_posters_cached(home, posters)
     card_grid(home, posters, "home", user=st.session_state.get("user"))
+    render_score_predictor()
     st.markdown("---")
     st.markdown('<div class="small-muted">Tip: search for a title to see similar anime. Typos are okay — try a title even if you don\'t remember the exact spelling.</div>', unsafe_allow_html=True)
 
