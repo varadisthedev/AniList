@@ -798,7 +798,23 @@ def load_score_predictor():
         raise FileNotFoundError(f"Score model not found at {MODEL_PATH}.")
     if not FEATURES_PATH.exists():
         raise FileNotFoundError(f"Model feature metadata not found at {FEATURES_PATH}.")
+    # The artifact was trained with scikit-learn 1.6.1. Streamlit Cloud now
+    # provisions Python 3.14, whose available wheel is scikit-learn 1.9.x.
+    # Restore the renamed private pickle class before loading the pipeline.
+    import sklearn.compose._column_transformer as column_transformer
+
+    if not hasattr(column_transformer, "_RemainderColsList"):
+        class _RemainderColsList(list):
+            pass
+
+        _RemainderColsList.__module__ = column_transformer.__name__
+        column_transformer._RemainderColsList = _RemainderColsList
+
     model = joblib.load(MODEL_PATH)
+    preprocessor = getattr(model, "named_steps", {}).get("preprocessor")
+    for _, transformer, _ in getattr(preprocessor, "transformers_", []):
+        if hasattr(transformer, "_fit_dtype") and not hasattr(transformer, "_fill_dtype"):
+            transformer._fill_dtype = transformer._fit_dtype
     feature_columns = joblib.load(FEATURES_PATH)
     if not isinstance(feature_columns, list) or not feature_columns:
         raise ValueError("The model feature metadata must be a non-empty list.")
